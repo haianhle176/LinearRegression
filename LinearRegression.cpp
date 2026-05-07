@@ -24,7 +24,6 @@ int main(){
 		}
 	}
     fin.close();
-    auto start = high_resolution_clock::now();
     P.initial(0,0);
     Scaler scaler(D);
     feature_scaling(S,fs_sel, scaler);
