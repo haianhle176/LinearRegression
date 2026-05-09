@@ -12,18 +12,20 @@ const float& Dataset::atY(int Sample, int Output) const {return Y[Sample * K + O
 void Dataset::addBias() {for (int i = 0; i < N; i++) {atX(i, D) = 1.0f;}}
 int Dataset::SizeX() const {return N * (D + 1);}
 int Dataset::SizeY() const {return N * K;}
+void Dataset::Reset() {fast_fill_scalar(X.data(),0,N * (D + 1));fast_fill_scalar(Y.data(),0,N * K);addBias();}
 
 Weight::Weight(int d, int k) : D(d), K(k), W((d+1) * k) {}
 float& Weight::atW(int Feature, int Output) {return W[Feature * K + Output];}
 float& Weight::Bias(int Output){return W[D * K + Output];}
 float* Weight::BiasVector(){return &W[D * K];}
 int Weight::SizeW() const {return (D + 1) * K;}
-void Weight::initial(float w_ini,float b_ini){fast_fill(W.data(),D * K,w_ini);fast_fill(W.data() + D * K, K ,b_ini);}
+void Weight::initial(float w_ini,float b_ini){fast_fill_scalar(W.data(),w_ini,D * K);fast_fill_scalar(W.data() + D * K,b_ini,K);}
 void Weight::show(){
 	cout << "\nW final : ";
 	for (int j = 0;j < SizeW();j++){
 		cout << W[j] << " ";
 	}
+	cout<<"\n";
 }
 void Loss_History::save(const Weight& P,float l){W_History.push_back(P);Loss.push_back(l);}
 void Loss_History::show(){
@@ -34,6 +36,7 @@ void Loss_History::show(){
 			cout << W_History[i].W[j] << " ";
 		}
 	}
+	cout<<"\n";
 }
 
 Scaler::Scaler(int d) : D(d), mu(d, 0.0f), sigma(d, 0.0f), inv_sigma(d, 1.0f) {}
@@ -69,6 +72,73 @@ float dot(const float* A,const float* B,int n){
     result = _mm_cvtss_f32(s);
     for (;i<n;i++){
     	result += A[i]*B[i];	
+	}
+    return result;
+}
+float Dist(const float* A,const float* B, int n){
+	int i = 0;float result = 0;
+	__m256 sum1 = _mm256_setzero_ps();
+	__m256 sum2 = _mm256_setzero_ps();
+	__m256 sum3 = _mm256_setzero_ps();
+	__m256 sum4 = _mm256_setzero_ps();
+	__m256 sub1, sub2, sub3, sub4;
+	for(;i<= n - 32;i+=32){
+		sub1 = _mm256_sub_ps(_mm256_loadu_ps(A + i),_mm256_loadu_ps(B + i));
+		sub2 = _mm256_sub_ps(_mm256_loadu_ps(A + i + 8),_mm256_loadu_ps(B + i + 8));
+		sub3 = _mm256_sub_ps(_mm256_loadu_ps(A + i + 16),_mm256_loadu_ps(B + i + 16));
+		sub4 = _mm256_sub_ps(_mm256_loadu_ps(A + i + 24),_mm256_loadu_ps(B + i + 24));
+		sum1 = _mm256_fmadd_ps(sub1,sub1,sum1);
+		sum2 = _mm256_fmadd_ps(sub2,sub2,sum2);
+		sum3 = _mm256_fmadd_ps(sub3,sub3,sum3);
+		sum4 = _mm256_fmadd_ps(sub4,sub4,sum4);
+	}
+	sum1 = _mm256_add_ps(_mm256_add_ps(sum1, sum2),_mm256_add_ps(sum3, sum4));
+    for (; i <= n - 8; i += 8) {
+        sub1 = _mm256_sub_ps(_mm256_loadu_ps(A + i),_mm256_loadu_ps(B + i));
+        sum1 = _mm256_fmadd_ps(sub1,sub1,sum1);
+    }
+	__m128 low  = _mm256_castps256_ps128(sum1);
+    __m128 high = _mm256_extractf128_ps(sum1, 1);
+    __m128 s = _mm_add_ps(low, high);
+    s = _mm_hadd_ps(s, s);
+    s = _mm_hadd_ps(s, s);
+    result = _mm_cvtss_f32(s);
+    for (;i<n;i++){
+    	result += (A[i]-B[i])*(A[i]-B[i]);	
+	}
+    return result;
+}
+float Dist(const float* A,float B, int n){
+	int i = 0;float result = 0;
+	__m256 sum1 = _mm256_setzero_ps();
+	__m256 sum2 = _mm256_setzero_ps();
+	__m256 sum3 = _mm256_setzero_ps();
+	__m256 sum4 = _mm256_setzero_ps();
+	__m256 sub1, sub2, sub3, sub4;
+	__m256 one = _mm256_set1_ps(B);
+	for(;i<= n - 32;i+=32){
+		sub1 = _mm256_sub_ps(_mm256_loadu_ps(A + i),one);
+		sub2 = _mm256_sub_ps(_mm256_loadu_ps(A + i + 8),one);
+		sub3 = _mm256_sub_ps(_mm256_loadu_ps(A + i + 16),one);
+		sub4 = _mm256_sub_ps(_mm256_loadu_ps(A + i + 24),one);
+		sum1 = _mm256_fmadd_ps(sub1,sub1,sum1);
+		sum2 = _mm256_fmadd_ps(sub2,sub2,sum2);
+		sum3 = _mm256_fmadd_ps(sub3,sub3,sum3);
+		sum4 = _mm256_fmadd_ps(sub4,sub4,sum4);
+	}
+	sum1 = _mm256_add_ps(_mm256_add_ps(sum1, sum2),_mm256_add_ps(sum3, sum4));
+    for (; i <= n - 8; i += 8) {
+        sub1 = _mm256_sub_ps(_mm256_loadu_ps(A + i),one);
+        sum1 = _mm256_fmadd_ps(sub1,sub1,sum1);
+    }
+	__m128 low  = _mm256_castps256_ps128(sum1);
+    __m128 high = _mm256_extractf128_ps(sum1, 1);
+    __m128 s = _mm_add_ps(low, high);
+    s = _mm_hadd_ps(s, s);
+    s = _mm_hadd_ps(s, s);
+    result = _mm_cvtss_f32(s);
+    for (;i<n;i++){
+    	result += (A[i]-B)*(A[i]-B);	
 	}
     return result;
 }
@@ -319,7 +389,34 @@ void Grad_MAE(const Dataset& S,float *Error,float* Grad){
 void Update_WB(Weight& P,float* Grad,float lr){
 	vector_fma_scalar(-lr,Grad,P.W.data(),P.SizeW());
 }
-	
+float VIF(const float* feature,const float *feature_pred ,float feature_mean,int n){
+	float RSS, TSS;
+	RSS = Dist(feature,feature_pred,n);
+	TSS = Dist(feature,feature_mean,n);
+	return TSS/RSS;
+}
+void VIF_Cal(const Dataset &S, float* VIF_arr){
+    Dataset S_temp(S.N, S.D - 1, 1);
+    Weight P_temp(S.D - 1, 1);
+    vector<float> feature_pred(S.N);
+    for (int i = 0; i < S.D; i++){
+        P_temp.initial(0, 0);
+        for (int j = 0; j < S.N; j++){
+            S_temp.Y[j] = S.atX(j, i);
+            int col = 0;
+            for (int e = 0; e < S.D; e++){
+                if (e != i)
+                    S_temp.atX(j, col++) = S.atX(j, e);
+            }
+        }
+	    Scaler scaler(S.D-1);
+    	feature_scaling(S_temp,"standard", scaler);
+		LinearRegression(S_temp, P_temp, 0.25,250,"mse");
+		rescale_weights(P_temp, scaler);
+		Y_Pred_LN(S_temp,P_temp,feature_pred.data());
+		VIF_arr[i] = VIF(S_temp.Y.data(),feature_pred.data(),1.0f/S.N *sum_elements(S_temp.Y.data(),S_temp.N),S.N);
+	}
+}
 float sum_elements(const float* A,int n){
 	int i = 0;float result = 0;
 	__m256 sum1 = _mm256_setzero_ps();
@@ -405,7 +502,7 @@ void sgn(float* A, int n) {
     	A[i] = (float)((A[i] > 0.0f) - (A[i] < 0.0f));
 	}
 }
-void fast_fill(float* data, int n, float value) {
+void fast_fill_scalar(float* data, float value, int n) {
     __m256 v_val = _mm256_set1_ps(value);
     int i = 0;
     for (; i <= n - 32; i += 32) {
@@ -415,6 +512,16 @@ void fast_fill(float* data, int n, float value) {
         _mm256_storeu_ps(data + i + 24, v_val);
     }
     for (; i < n; i++) data[i] = value;
+}
+void fast_fill(float* A, const float *B, int n) {
+    int i = 0;
+    for (; i <= n - 32; i += 32) {
+        _mm256_storeu_ps(A + i,_mm256_loadu_ps(B + i));
+        _mm256_storeu_ps(A + i + 8,_mm256_loadu_ps(B + i + 8));
+        _mm256_storeu_ps(A + i + 16,_mm256_loadu_ps(B + i + 16));
+        _mm256_storeu_ps(A + i + 24,_mm256_loadu_ps(B + i + 24));
+    }
+    for (; i < n; i++) A[i] = B[i];
 }	
 void feature_scaling(Dataset& S, string type, Scaler& scaler){
     if (toLowerCase(type) == "normal"){
@@ -436,10 +543,10 @@ void feature_scaling(Dataset& S, string type, Scaler& scaler){
     }
     else if (toLowerCase(type) == "standard"){
         vector<float> temp(S.D);
-        for (int i = 0; i < S.N; i++)
+        for (int i = 0; i < S.N; i++){
             vector_add(scaler.mu.data(), &S.X[i*(S.D+1)], scaler.mu.data(), S.D);
+		}
         vector_mul(scaler.mu.data(), 1.0f/S.N, scaler.mu.data(), S.D);
-
         for (int i = 0; i < S.N; i++){
             vector_sub(&S.X[i*(S.D+1)], scaler.mu.data(), temp.data(), S.D);
             VxV(temp.data(), temp.data(), temp.data(), S.D);
@@ -459,13 +566,13 @@ void feature_scaling(Dataset& S, string type, Scaler& scaler){
 void rescale_weights(Weight& P, const Scaler& scaler){
     // W_true = W_scaled / sigma  (divide, not multiply)
     for (int j = 0; j < P.D; j++)
-        vector_mul(P.W.data() + j*P.K, 1.0f/scaler.sigma[j], P.W.data() + j*P.K, P.K);
+        vector_mul(P.W.data() + j*P.K, scaler.inv_sigma[j], P.W.data() + j*P.K, P.K);
 
     // b_true = b_scaled - sum_j(W_true[j][k] * mu[j])
     for (int j = 0; j < P.D; j++)
         vector_fma_scalar(-scaler.mu[j], P.W.data() + j*P.K, P.BiasVector(), P.K);
 }
-void LinearRegression(Dataset S,Weight& P,float lr,int epoch,string sel,Loss_History& L){
+void LinearRegression(const Dataset& S,Weight& P,float lr,int epoch,string sel,Loss_History& L){
 	sel = toLowerCase(sel);
 	vector <float> Grad(P.SizeW());
 	vector <float> Error(S.SizeY());
@@ -484,5 +591,29 @@ void LinearRegression(Dataset S,Weight& P,float lr,int epoch,string sel,Loss_His
 			Grad_MAE(S,Error.data(),Grad.data());
 			Update_WB(P,Grad.data(),lr);
 		}
+	}
+}
+void LinearRegression(const Dataset& S,Weight& P,float lr,int epoch,string sel){
+	sel = toLowerCase(sel);
+	vector <float> Grad(P.SizeW());
+	vector <float> Error(S.SizeY());
+	if (sel == "mse"){
+		for (int i = 0;i<epoch;i++){
+			Error_Cal(S,P,Error.data());
+			Grad_MSE(S,Error.data(),Grad.data());
+			Update_WB(P,Grad.data(),lr);
+		}
+	}
+	else if (sel == "mae"){
+		for (int i = 0;i<epoch;i++){
+			Error_Cal(S,P,Error.data());
+			Grad_MAE(S,Error.data(),Grad.data());
+			Update_WB(P,Grad.data(),lr);
+		}
+	}
+}
+void FeatureEngineer(Dataset &S){
+	for (int i = 0;i<S.N;i++){
+		S.atX(i,2) = S.atX(i,0) * S.atX(i,1); 
 	}
 }

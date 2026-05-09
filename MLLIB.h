@@ -18,6 +18,7 @@ struct Dataset {
     void addBias();
     int SizeX() const;
     int	SizeY() const;
+    void Reset();
 };
 struct Weight{
 	int D, K;
@@ -63,6 +64,8 @@ void Error_Cal(const Dataset& S,const Weight& P,float *Error);
 float MSE(const float *Error,int total);
 float MAE(const float *Error,int total);
 void Y_Pred_LN(const Dataset& S,const Weight& P,float *Y);
+float VIF(const float* feature,const float *feature_pred ,const float* feature_mean,int n);
+void VIF_Cal(const Dataset &S,float * VIF_arr);
 
 //GradientDescent
 void Grad_MSE(const Dataset& S,float *Error,float* Grad);
@@ -74,11 +77,16 @@ float sum_elements(const float* A,int n);
 int scalar_sgn(float x);
 void sgn_neglect(float *A,int n);
 void sgn(float* A, int n);
-void fast_fill(float* data, int n, float value);
+void fast_fill_scalar(float* data, float value,int n);
+void fast_fill(float* A, const float *B, int n);
+float Dist(const float* A,const float* B, int n);
+float Dist(const float* A,float B, int n);
 
-//FeatureScaling
+//FeatureTransform
 void feature_scaling(Dataset& S,string type,Scaler& scaler);
 void rescale_weights(Weight& P, const Scaler& scaler);
+
 //Model
-void LinearRegression(Dataset S,Weight& P,float lr,int epoch,string sel,Loss_History& L);
+void LinearRegression(const Dataset& S,Weight& P,float lr,int epoch,string sel,Loss_History& L);
+void LinearRegression(const Dataset& S,Weight& P,float lr,int epoch,string sel);
 #endif
