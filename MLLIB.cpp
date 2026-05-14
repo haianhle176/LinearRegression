@@ -2,7 +2,7 @@
 #include<cmath>
 #include <immintrin.h>
 #include <omp.h>
-#include <algorithm>
+#include <random>
 
 Dataset::Dataset(int n, int d, int k) : N(n), D(d),K(k), X(n * (d + 1)), Y(n * k) {addBias();}
 float& Dataset::atX(int Sample, int FeaturePlus) {return X[Sample * (D + 1) + FeaturePlus];}
@@ -20,12 +20,12 @@ float& Weight::Bias(int Output){return W[D * K + Output];}
 float* Weight::BiasVector(){return &W[D * K];}
 int Weight::SizeW() const {return (D + 1) * K;}
 void Weight::initial(float w_ini,float b_ini){fast_fill_scalar(W.data(),w_ini,D * K);fast_fill_scalar(W.data() + D * K,b_ini,K);}
+void Weight::initial(const float* w_ini,const float* b_ini){fast_fill(W.data(),w_ini,D * K);fast_fill(W.data() + D * K,b_ini,K);}
 void Weight::show(){
 	cout << "\nW final : ";
 	for (int j = 0;j < SizeW();j++){
 		cout << W[j] << " ";
 	}
-	cout<<"\n";
 }
 void Loss_History::save(const Weight& P,float l){W_History.push_back(P);Loss.push_back(l);}
 void Loss_History::show(){
@@ -36,8 +36,9 @@ void Loss_History::show(){
 			cout << W_History[i].W[j] << " ";
 		}
 	}
-	cout<<"\n";
+	cout<<"\nLoss final: "<<Loss[Loss.size() - 1];
 }
+void Loss_History::showfinal(){cout<<"\nLoss final: "<<Loss[Loss.size() - 1];}
 
 Scaler::Scaler(int d) : D(d), mu(d, 0.0f), sigma(d, 0.0f), inv_sigma(d, 1.0f) {}
 
@@ -389,33 +390,35 @@ void Grad_MAE(const Dataset& S,float *Error,float* Grad){
 void Update_WB(Weight& P,float* Grad,float lr){
 	vector_fma_scalar(-lr,Grad,P.W.data(),P.SizeW());
 }
-float VIF(const float* feature,const float *feature_pred ,float feature_mean,int n){
+float VIF_Cal(const float* feature,const float *feature_pred ,float feature_mean,int n){
 	float RSS, TSS;
 	RSS = Dist(feature,feature_pred,n);
 	TSS = Dist(feature,feature_mean,n);
 	return TSS/RSS;
 }
-void VIF_Cal(const Dataset &S, float* VIF_arr){
+void VIF(const Dataset &S, vector<float>& VIF_arr,string sel ,int epo_vif,float lr_vif) {
     Dataset S_temp(S.N, S.D - 1, 1);
     Weight P_temp(S.D - 1, 1);
     vector<float> feature_pred(S.N);
-    for (int i = 0; i < S.D; i++){
-        P_temp.initial(0, 0);
-        for (int j = 0; j < S.N; j++){
+    for (int i = 0; i < (int)VIF_arr.size(); i++) {
+        P_temp.initial(0.0f, 0.0f);
+        for (int j = 0; j < S.N; j++) {
             S_temp.Y[j] = S.atX(j, i);
             int col = 0;
-            for (int e = 0; e < S.D; e++){
+            for (int e = 0; e < S.D; e++) {
                 if (e != i)
                     S_temp.atX(j, col++) = S.atX(j, e);
             }
         }
-	    Scaler scaler(S.D-1);
-    	feature_scaling(S_temp,"standard", scaler);
-		LinearRegression(S_temp, P_temp, 0.25,250,"mse");
-		rescale_weights(P_temp, scaler);
-		Y_Pred_LN(S_temp,P_temp,feature_pred.data());
-		VIF_arr[i] = VIF(S_temp.Y.data(),feature_pred.data(),1.0f/S.N *sum_elements(S_temp.Y.data(),S_temp.N),S.N);
-	}
+        float feature_mean = (1.0f / S.N) * sum_elements(S_temp.Y.data(), S.N);
+        vector<float> X_original = S_temp.X;
+        Scaler scaler(S.D - 1);
+        feature_scaling(S_temp,"standard", scaler);
+        LinearRegression(S_temp, P_temp, lr_vif, epo_vif, sel);
+        rescale_weights(P_temp, scaler);
+        MxM(X_original.data(),P_temp.W.data(),feature_pred.data(),S_temp.N,S_temp.D + 1,S_temp.K);
+        VIF_arr[i] = VIF_Cal(S_temp.Y.data(), feature_pred.data(), feature_mean, S.N);
+    }
 }
 float sum_elements(const float* A,int n){
 	int i = 0;float result = 0;
@@ -502,6 +505,21 @@ void sgn(float* A, int n) {
     	A[i] = (float)((A[i] > 0.0f) - (A[i] < 0.0f));
 	}
 }
+float RandUni(float a,float b){
+    static std::mt19937 gen(std::chrono::high_resolution_clock::now().time_since_epoch().count());
+    uniform_real_distribution<float> dis(a, b);
+    return dis(gen);
+}
+void FillNormal(float* A, int size, float mu, float sigma) {
+    static std::mt19937 gen(std::chrono::high_resolution_clock::now().time_since_epoch().count());
+    static std::normal_distribution<float> dis(mu, sigma);
+    dis.param(std::normal_distribution<float>::param_type(mu, sigma));
+    for (int i = 0; i < size; ++i) {
+        A[i] = dis(gen);
+    }
+}
+float Min(float a, float b){return (a<=b) ? a:b;}
+float Max(float a, float b){return (a>=b) ? a:b;}
 void fast_fill_scalar(float* data, float value, int n) {
     __m256 v_val = _mm256_set1_ps(value);
     int i = 0;
@@ -530,8 +548,8 @@ void feature_scaling(Dataset& S, string type, Scaler& scaler){
             scaler.mu[j] = S.atX(0, j);
             float max_val = scaler.mu[j];
             for (int i = 1; i < S.N; i++){
-                scaler.mu[j] = min(scaler.mu[j], S.atX(i, j));
-                max_val      = max(max_val,       S.atX(i, j));
+                scaler.mu[j] = Min(scaler.mu[j], S.atX(i, j));
+                max_val      = Max(max_val,       S.atX(i, j));
             }
             scaler.sigma[j]     = max_val - scaler.mu[j];
             scaler.inv_sigma[j] = 1.0f / scaler.sigma[j];
@@ -612,8 +630,40 @@ void LinearRegression(const Dataset& S,Weight& P,float lr,int epoch,string sel){
 		}
 	}
 }
+void transform_poly(const Dataset &S,Dataset &S_trans,int degree){
+	if (degree < 2) S_trans = S;
+	else {
+		S_trans.Y = S.Y;
+		for (int i = 0; i < S.N; i++){
+			float x_val = S.atX(i, 0);
+	        for (int d = 1; d <= degree; d++) {
+	            S_trans.atX(i, d-1) = pow(x_val, d);
+	        }
+    	}
+	}
+}
+void TrainFunction(Dataset S,Weight& P,float lr,int epoch,string fs_sel,string sel,Loss_History &L){
+	int N = S.N, D = S.D, K = S.K;
+	vector <float> w_ini(D * K); vector <float> b_ini(K);
+	FillNormal(w_ini.data(),w_ini.size(),0,1);
+	FillNormal(b_ini.data(),b_ini.size(),0,1);
+	P.initial(w_ini.data(),b_ini.data());
+	Scaler scaler(D); feature_scaling(S,fs_sel, scaler);
+	LinearRegression(S, P, lr, epoch, sel, L); 	rescale_weights(P, scaler);
+}
 void FeatureEngineer(Dataset &S){
 	for (int i = 0;i<S.N;i++){
-		S.atX(i,2) = S.atX(i,0) * S.atX(i,1); 
+		S.atX(i,1) = S.atX(i,0) * S.atX(i,1); 
 	}
+}
+void ShowVecto(const vector<float>& A){
+	for (float x : A){
+		cout << x << " ";
+	}
+}
+void StartTime() {start = high_resolution_clock::now();}
+void StopTime() {stop = high_resolution_clock::now();}
+void ShowTime() {
+    auto duration = duration_cast<milliseconds>(stop - start);
+    cout << "\nThoi gian thuc thi: " << duration.count() << " ms" << endl;
 }
